@@ -1,0 +1,116 @@
+name: bb-actions-token-boundary
+
+on:
+  push:
+    branches:
+      - actions-probe-20260810
+    paths:
+      - trigger-actions-boundary.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bb-actions-token-boundary-20260810
+  cancel-in-progress: false
+
+jobs:
+  ref-boundary:
+    name: ref-boundary
+    runs-on: [self-hosted, macOS, ARM64, bb-actions-20260810-7f41]
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      GH_CANDIDATE_SHA: ${{ github.sha }}
+      GH_CONTROL_BRANCH: actions-control-20260810
+      GH_TARGET_BRANCH: actions-target-20260810
+    steps:
+      - name: Compare unruled and ruled ref updates
+        shell: bash
+        run: |
+          ruby <<'RUBY'
+          require "json"
+          require "net/http"
+          require "openssl"
+          require "uri"
+
+          expected_repository = "MasonOrg357/actions-trust-lab-20260810"
+          expected_control = "actions-control-20260810"
+          expected_target = "actions-target-20260810"
+          user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+          repository = ENV.fetch("GH_REPOSITORY")
+          control = ENV.fetch("GH_CONTROL_BRANCH")
+          target = ENV.fetch("GH_TARGET_BRANCH")
+          candidate = ENV.fetch("GH_CANDIDATE_SHA")
+          token = ENV.fetch("GH_TOKEN")
+          abort "repository drift" unless repository == expected_repository
+          abort "control drift" unless control == expected_control
+          abort "target drift" unless target == expected_target
+          abort "candidate drift" unless candidate.match?(/\A[0-9a-f]{40}\z/)
+          abort "empty token" if token.empty?
+
+          request_ref = lambda do |branch|
+            uri = URI("https://api.github.com/repos/#{repository}/git/refs/heads/#{branch}")
+            http = Net::HTTP::Proxy("127.0.0.1", 8083).new(uri.host, uri.port)
+            http.use_ssl = true
+            http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+            http.open_timeout = 15
+            http.read_timeout = 30
+            request = Net::HTTP::Patch.new(uri.request_uri)
+            request["User-Agent"] = user_agent
+            request["Accept"] = "application/vnd.github+json"
+            request["Authorization"] = "Bearer #{token}"
+            request["X-GitHub-Api-Version"] = "2022-11-28"
+            request["Content-Type"] = "application/json"
+            request.body = JSON.generate({ "sha" => candidate, "force" => false })
+            response = http.request(request)
+            code = response.code.to_i
+            begin
+              body = JSON.parse(response.body.to_s)
+            rescue JSON::ParserError
+              body = {}
+            end
+            body = {} unless body.is_a?(Hash)
+            {
+              "branch" => branch,
+              "status" => code,
+              "object_sha" => body.dig("object", "sha"),
+              "message" => body["message"].is_a?(String) ? body["message"] : nil
+            }
+          end
+
+          control_result = request_ref.call(control)
+          if [401, 403, 407, 429].include?(control_result["status"]) || control_result["status"] >= 500
+            puts JSON.generate({ "status" => "blocked_not_clean", "phase" => "control", "control" => control_result, "credentials_output" => false })
+            exit 3
+          end
+          unless control_result["status"] == 200 && control_result["object_sha"] == candidate
+            puts JSON.generate({ "status" => "mixed", "phase" => "control", "control" => control_result, "credentials_output" => false })
+            exit 2
+          end
+
+          target_result = request_ref.call(target)
+          if [401, 403, 407, 429].include?(target_result["status"]) || target_result["status"] >= 500
+            puts JSON.generate({ "status" => "blocked_not_clean", "phase" => "target", "control" => control_result, "target" => target_result, "credentials_output" => false })
+            exit 3
+          end
+          disposition = if target_result["status"] == 200 && target_result["object_sha"] == candidate
+                          "candidate_finding"
+                        elsif target_result["status"] == 422
+                          "clean"
+                        else
+                          "mixed"
+                        end
+          puts JSON.generate({
+            "status" => disposition,
+            "repository" => repository,
+            "candidate_sha" => candidate,
+            "control" => control_result,
+            "target" => target_result,
+            "same_token" => true,
+            "force" => false,
+            "credentials_output" => false
+          })
+          exit(disposition == "candidate_finding" ? 10 : disposition == "clean" ? 0 : 2)
+          RUBY
