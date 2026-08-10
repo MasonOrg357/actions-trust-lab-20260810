@@ -1,0 +1,81 @@
+name: bb-actions-env-policy-boundary
+
+on:
+  push:
+    branches:
+      - actions-env-policy-probe-20260810
+    paths:
+      - trigger-env-policy-boundary.txt
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bb-actions-env-policy-boundary-20260810
+  cancel-in-progress: false
+
+jobs:
+  environment-policy-boundary:
+    name: environment-policy-boundary
+    environment: bb-env-policy-20260810
+    runs-on: [self-hosted, macOS, ARM64, bb-actions-env-policy-20260810-b17d]
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      GH_CANDIDATE_SHA: ${{ github.sha }}
+      BB_ENV_SECRET: ${{ secrets.BB_ENV_POLICY_CANARY }}
+    steps:
+      - name: Compare policy environment secret at job start
+        shell: bash
+        run: |
+          ruby <<'RUBY'
+          require "digest"
+          require "json"
+          require "net/http"
+          require "openssl"
+          require "uri"
+
+          repository = ENV.fetch("GH_REPOSITORY")
+          candidate = ENV.fetch("GH_CANDIDATE_SHA")
+          token = ENV.fetch("GH_TOKEN")
+          secret = ENV.fetch("BB_ENV_SECRET", "")
+          abort "repository drift" unless repository == "MasonOrg357/actions-trust-lab-20260810"
+          abort "candidate drift" unless candidate.match?(/A[0-9a-f]{40}z/)
+          abort "empty job token" if token.empty?
+          secret_present = !secret.empty?
+          secret_match = secret_present && Digest::SHA256.hexdigest(secret) == "867aa0cfa6289d2475f918f4c6bc5e850b5566ba868efffc33b83c85779144c4"
+
+          update_ref = lambda do |branch|
+            uri = URI("https://api.github.com/repos/#{repository}/git/refs/heads/#{branch}")
+            http = Net::HTTP::Proxy("127.0.0.1", 8083).new(uri.host, uri.port)
+            http.use_ssl = true
+            http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+            request = Net::HTTP::Patch.new(uri.request_uri)
+            request["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+            request["Accept"] = "application/vnd.github+json"
+            request["Authorization"] = "Bearer #{token}"
+            request["X-GitHub-Api-Version"] = "2026-03-10"
+            request["Content-Type"] = "application/json"
+            request.body = JSON.generate({ "sha" => candidate, "force" => false })
+            response = http.request(request)
+            body = begin
+              JSON.parse(response.body.to_s)
+            rescue JSON::ParserError
+              {}
+            end
+            { "status" => response.code.to_i, "sha" => body.dig("object", "sha") }
+          end
+
+          control = update_ref.call("actions-env-policy-run-control-20260810")
+          proof = secret_match ? update_ref.call("actions-env-policy-secret-proof-20260810") : { "status" => "skipped", "sha" => nil }
+          puts JSON.generate({
+            "secret_present" => secret_present,
+            "secret_match" => secret_match,
+            "control" => control,
+            "proof" => proof,
+            "secret_value_output" => false
+          })
+          abort "run control failed" unless control["status"] == 200 && control["sha"] == candidate
+          abort "secret proof failed" if secret_match && !(proof["status"] == 200 && proof["sha"] == candidate)
+          RUBY
