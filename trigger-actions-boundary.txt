@@ -1,1 +1,1 @@
-controlled push while repository Actions disabled
+controlled Actions cancellation boundary trigger
