@@ -1,1 +1,1 @@
-environment policy positive-retry transition
+environment policy transition transition
