@@ -1,1 +1,1 @@
-controlled Actions disablement transition trigger
+controlled push while repository Actions disabled
