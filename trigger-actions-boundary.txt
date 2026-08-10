@@ -1,1 +1,1 @@
-controlled Actions token boundary trigger
+controlled Actions disablement transition trigger
