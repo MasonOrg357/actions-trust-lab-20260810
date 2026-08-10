@@ -1,1 +1,1 @@
-environment policy transition transition
+environment policy denied-control transition
