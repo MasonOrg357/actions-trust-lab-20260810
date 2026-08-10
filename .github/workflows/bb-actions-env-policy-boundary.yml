@@ -44,7 +44,7 @@ jobs:
           abort "candidate drift" unless candidate.match?(/A[0-9a-f]{40}z/)
           abort "empty job token" if token.empty?
           secret_present = !secret.empty?
-          secret_match = secret_present && Digest::SHA256.hexdigest(secret) == "867aa0cfa6289d2475f918f4c6bc5e850b5566ba868efffc33b83c85779144c4"
+          secret_match = secret_present && Digest::SHA256.hexdigest(secret) == "c82411fadb10bc883ffdcc3a912de7b5b5e992e7591f9aaf6fa3f43d21185cf4"
 
           update_ref = lambda do |branch|
             uri = URI("https://api.github.com/repos/#{repository}/git/refs/heads/#{branch}")
