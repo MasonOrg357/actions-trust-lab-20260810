@@ -41,7 +41,7 @@ jobs:
           token = ENV.fetch("GH_TOKEN")
           secret = ENV.fetch("BB_ENV_SECRET", "")
           abort "repository drift" unless repository == "MasonOrg357/actions-trust-lab-20260810"
-          abort "candidate drift" unless candidate.match?(/A[0-9a-f]{40}z/)
+          abort "candidate drift" unless candidate.match?(/\A[0-9a-f]{40}\z/)
           abort "empty job token" if token.empty?
           secret_present = !secret.empty?
           secret_match = secret_present && Digest::SHA256.hexdigest(secret) == "c82411fadb10bc883ffdcc3a912de7b5b5e992e7591f9aaf6fa3f43d21185cf4"
